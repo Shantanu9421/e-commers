@@ -115,55 +115,62 @@ export const logoutUser = async (req, res) => {
 
 
 export const placeOrder = async (req, res) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-    try {
-        const userId = req.user.id;
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-        if (!userId) {
-            return res.status(400).json({ success: false, message: "userId is required" });
-        }
+  try {
+    const userId = req.user.id;
+    if (!userId) return res.status(400).json({ success: false, message: "userId is required" });
 
-        const cart = await Cart.findOne({ userId }).populate("items.productId");
-        if (!cart || cart.items.length === 0) {
-            return res.status(400).json({ success: false, message: "Cart is empty" });
-        }
-
-        const totalAmount = cart.items.reduce((sum, item) => {
-            return sum + (item.productId.product_price * item.quantity);
-        }, 0);
-
-        const order = new Order({
-            userId,
-            products: cart.items.map(item => ({
-                productId: item.productId._id,
-                quantity: item.quantity,
-            })),
-            totalAmount,
-            status: "PENDING_PAYMENT",
-            payment_Status: "UNPAID"
-        });
-
-        await order.save({ session });
-
-        cart.items = [];
-        await cart.save({ session });
-
-        await session.commitTransaction();
-        session.endSession();
-
-        res.status(201).json({
-            success: true,
-            message: "Order created successfully with PENDING_PAYMENT status",
-            order
-        });
-
-    } catch (error) {
-        await session.abortTransaction();
-        session.endSession();
-        console.error("Error in createOrder:", error);
-        res.status(500).json({ success: false, message: "Server error" });
+    const cart = await Cart.findOne({ userId }).populate("items.productId");
+    if (!cart || cart.items.length === 0) {
+      return res.status(400).json({ success: false, message: "Cart is empty" });
     }
+
+    let totalAmount = 0;
+
+    for (const item of cart.items) {
+      const product = await Product.findById(item.productId._id).session(session);
+      if (!product || product.availableStock < item.quantity) {
+        throw new Error(`Insufficient stock for ${product?.product_name || "unknown product"}`);
+      }
+
+      product.availableStock -= item.quantity;
+      product.reservedStock += item.quantity;
+      await product.save({ session });
+
+      totalAmount += product.product_price * item.quantity;
+    }
+
+    const order = new Order({
+      userId,
+      products: cart.items.map((item) => ({
+        productId: item.productId._id,
+        quantity: item.quantity,
+      })),
+      totalAmount,
+      status: "PENDING_PAYMENT",
+      payment_Status: "UNPAID",
+    });
+
+    await order.save({ session });
+
+    cart.items = [];
+    await cart.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(201).json({
+      success: true,
+      message: "Order placed successfully. Stock reserved.",
+      order,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 export const getallorders = async (req, res) => {
