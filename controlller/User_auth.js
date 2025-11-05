@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import Cart from "../model/cart.js";
 import Order from "../model/Order.js";
 import mongoose from "mongoose";
+import Product from "../model/Product_model.js";
 
 
 export const userRegister = async (req, res) => {
